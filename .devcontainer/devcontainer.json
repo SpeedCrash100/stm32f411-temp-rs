@@ -1,0 +1,31 @@
+{
+    "name": "STM32-rust-dev",
+    "build": {
+        "dockerfile": "Dockerfile",
+        // Update 'VARIANT' to pick an Ubuntu version: hirsute, focal, bionic
+        // Use hirsute or bionic on local arm64/Apple Silicon.
+        "args": {
+            "VARIANT": "bullseye"
+        }
+    },
+    // Set *default* container specific settings.json values on container create.
+    "settings": {
+        "cortex-debug.gdbPath": "gdb-multiarch"
+    },
+    // Add the IDs of extensions you want installed when the container is created.
+    "extensions": [
+        "rust-lang.rust-analyzer",
+        "serayuzgur.crates",
+        "bungcip.better-toml",
+        "marus25.cortex-debug"
+    ],
+    // Use 'forwardPorts' to make a list of ports inside the container available locally.
+    // "forwardPorts": [],
+    // Use 'postCreateCommand' to run commands after the container is created.
+    // "postCreateCommand": "uname -a",
+    // Comment out to connect as root instead. More info: https://aka.ms/vscode-remote/containers/non-root.
+    "remoteUser": "vscode",
+    "runArgs": [
+        "--privileged"
+    ]
+}
