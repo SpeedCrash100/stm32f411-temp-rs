@@ -4,20 +4,22 @@
 extern crate panic_halt;
 extern crate stm32f4xx_hal as hal;
 
+mod drawables;
+
 /// Peripheral Access Crate for our device
 pub use hal::pac;
 
 #[rtic::app(device = crate::pac, peripherals = true, dispatchers = [SPI5])]
 mod app {
     use core::cell::RefCell;
-    use core::fmt::Write;
     use cortex_m::{asm::wfi, interrupt::Mutex};
-    use embedded_graphics::text::Text;
     use hal::{gpio::*, i2c::I2c1, prelude::*};
     use heapless::spsc::Queue;
     use lm75::Lm75;
     use shared_bus::{BusManager, I2cProxy};
     use ssd1306::{mode::BufferedGraphicsMode, prelude::*, Ssd1306};
+
+    use crate::drawables::prelude::*;
 
     pub type MainI2cSCL = PB8<AF4<OpenDrain>>;
     pub type MainI2cSDA = PB9<AF4<OpenDrain>>;
@@ -28,15 +30,9 @@ mod app {
     const TEMP_PROBE_ADDRESS: u8 = 0x48;
     const TEMP_POINT_COUNT: usize = 32;
     const TEMP_QUEUE_SIZE: usize = TEMP_POINT_COUNT + 1;
-    const SCREEN_WIDTH: usize = 128;
-    const SCREEN_HEIGHT: usize = 64;
-    const SCREEN_GRAPH_HEIGHT: usize = 64 - 16;
-    const TEMP_ACCURACY: f32 = 0.125;
 
     #[shared]
     struct Shared {
-        i2c: &'static SharedI2C,
-
         temp_data: Queue<f32, TEMP_QUEUE_SIZE>,
     }
 
@@ -97,7 +93,6 @@ mod app {
 
         (
             Shared {
-                i2c: managed_i2c,
                 temp_data: Queue::new(),
             },
             Local {
@@ -137,7 +132,7 @@ mod app {
         use embedded_graphics::mono_font::MonoTextStyleBuilder;
         use embedded_graphics::pixelcolor::BinaryColor;
         use embedded_graphics::prelude::*;
-        use embedded_graphics::primitives::{Polyline, PrimitiveStyleBuilder};
+        use embedded_graphics::primitives::PrimitiveStyleBuilder;
 
         draw::spawn_after(1000.millis()).ok();
 
@@ -154,57 +149,35 @@ mod app {
             .fill_color(BinaryColor::Off)
             .build();
 
-        let step = SCREEN_WIDTH / TEMP_POINT_COUNT;
-        let point_range_x = (0..SCREEN_WIDTH).rev().step_by(step);
-        let mut points = [Point::default(); TEMP_POINT_COUNT];
-
         let max_temp = temperatures.iter().cloned().reduce(f32::max).unwrap();
         let min_temp = temperatures.iter().cloned().reduce(f32::min).unwrap();
-
-        for (pos, x) in point_range_x.enumerate() {
-            let temp = temperatures[TEMP_POINT_COUNT - pos - 1];
-            let mut normalized_temp = temp - min_temp;
-            // If this happens -> temperture have changed and we divide
-            if (max_temp - min_temp) > TEMP_ACCURACY {
-                normalized_temp /= max_temp - min_temp;
-            };
-
-            let display_temp = (normalized_temp) * ((SCREEN_GRAPH_HEIGHT as f32) - 1.0);
-
-            points[pos] = Point {
-                x: x as i32,
-                y: SCREEN_HEIGHT as i32 - display_temp as i32 - 1,
-            };
-        }
-
-        let polyline = Polyline::new(&points).into_styled(primitive_style);
 
         let text_style = MonoTextStyleBuilder::new()
             .font(&FONT_6X10)
             .text_color(BinaryColor::On)
             .build();
 
-        let mut min_temp_string: heapless::String<16> = Default::default();
-        let mut max_temp_string: heapless::String<16> = Default::default();
-        let mut cur_temp_string: heapless::String<16> = Default::default();
-
-        write!(&mut min_temp_string, "{:.2}", min_temp).ok();
-        write!(&mut max_temp_string, "{:.2}", max_temp).ok();
-        write!(&mut cur_temp_string, "{:.2}", temperatures[0]).ok();
-
         let display = ctx.local.display;
         display.clear();
 
-        polyline.draw(display).ok();
+        let plot = Plot::new(primitive_style)
+            .with_position(Point::new(0, 16))
+            .with_size(Size::new(128, 64 - 16));
 
-        Text::new(&min_temp_string, Point { x: 0, y: 60 }, text_style)
+        plot.generate(&temperatures).draw(display).ok();
+
+        TemperatureText::new(Point { x: 0, y: 60 }, text_style)
+            .with_temperature(min_temp)
             .draw(display)
             .ok();
-        Text::new(&max_temp_string, Point { x: 0, y: 13 }, text_style)
+
+        TemperatureText::new(Point { x: 0, y: 13 }, text_style)
+            .with_temperature(max_temp)
             .draw(display)
             .ok();
 
-        Text::new(&cur_temp_string, Point { x: 90, y: 13 }, text_style)
+        TemperatureText::new(Point { x: 90, y: 13 }, text_style)
+            .with_temperature(*temperatures.last().unwrap())
             .draw(display)
             .ok();
 
