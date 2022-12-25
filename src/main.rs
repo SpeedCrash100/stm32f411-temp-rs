@@ -13,7 +13,13 @@ pub use hal::pac;
 mod app {
     use core::cell::RefCell;
     use cortex_m::{asm::wfi, interrupt::Mutex};
-    use hal::{gpio::*, i2c::I2c1, prelude::*};
+    use embedded_storage::nor_flash::NorFlash;
+    use hal::{
+        flash::{FlashExt, LockedFlash},
+        gpio::*,
+        i2c::I2c1,
+        prelude::*,
+    };
     use heapless::spsc::Queue;
     use lm75::Lm75;
     use shared_bus::{BusManager, I2cProxy};
@@ -30,10 +36,13 @@ mod app {
     const TEMP_PROBE_ADDRESS: u8 = 0x48;
     const TEMP_POINT_COUNT: usize = 32;
     const TEMP_QUEUE_SIZE: usize = TEMP_POINT_COUNT + 1;
+    const TEMP_UPDATE_TIME_MS: u32 = 5 * 60 * 1000;
 
     #[shared]
     struct Shared {
         temp_data: Queue<f32, TEMP_QUEUE_SIZE>,
+
+        locked_flash: LockedFlash,
     }
 
     #[local]
@@ -59,6 +68,9 @@ mod app {
 
         // Timers
         let mono = dp.TIM5.monotonic_us(&clocks);
+
+        // Flash
+        let locked_flash = LockedFlash::new(dp.FLASH);
 
         // I2C bus
 
@@ -88,12 +100,14 @@ mod app {
                 .into_buffered_graphics_mode();
         display.init().unwrap();
 
+        load_temperature::spawn().ok();
         temperature_take::spawn().ok();
         draw::spawn().ok();
 
         (
             Shared {
                 temp_data: Queue::new(),
+                locked_flash,
             },
             Local {
                 display,
@@ -110,9 +124,56 @@ mod app {
         }
     }
 
+    #[task(shared=[locked_flash, temp_data])]
+    fn load_temperature(ctx: load_temperature::Context) {
+        let temp_size = core::mem::size_of::<f32>();
+
+        (ctx.shared.locked_flash, ctx.shared.temp_data).lock(|f, d| {
+            let size = f.len();
+            let start_sector = size - temp_size * TEMP_POINT_COUNT;
+
+            let flash_content = &f.read()[start_sector..];
+
+            // Clear previous data
+            while !d.is_empty() {
+                d.dequeue();
+            }
+
+            for i in 0..TEMP_POINT_COUNT {
+                let offset = i * temp_size;
+                let mut raw_data = [0u8; 4];
+                raw_data.copy_from_slice(&flash_content[offset..(offset + temp_size)]);
+
+                let val = f32::from_be_bytes(raw_data);
+                d.enqueue(val).ok();
+            }
+        });
+    }
+
+    #[task(shared=[locked_flash, temp_data])]
+    fn save_temperature(ctx: save_temperature::Context) {
+        let temp_size = core::mem::size_of::<f32>();
+
+        (ctx.shared.locked_flash, ctx.shared.temp_data).lock(|f, d| {
+            let size = f.len();
+            let start_sector = size - temp_size * TEMP_POINT_COUNT;
+
+            let mut unlocked_flash = f.unlocked();
+            NorFlash::erase(&mut unlocked_flash, start_sector as u32, size as u32).unwrap();
+
+            for (i, temp) in d.iter().enumerate() {
+                let offset = (i * temp_size) as u32;
+                let raw_data = temp.to_be_bytes();
+
+                NorFlash::write(&mut unlocked_flash, start_sector as u32 + offset, &raw_data)
+                    .unwrap();
+            }
+        });
+    }
+
     #[task(local = [temp_probe], shared = [temp_data])]
     fn temperature_take(mut ctx: temperature_take::Context) {
-        temperature_take::spawn_after(1000.millis()).ok();
+        temperature_take::spawn_after(TEMP_UPDATE_TIME_MS.millis()).ok();
 
         let Ok(temp) = ctx.local.temp_probe.read_temperature() else {
             return;
@@ -124,6 +185,8 @@ mod app {
             }
             q.enqueue(temp).ok();
         });
+
+        save_temperature::spawn().ok();
     }
 
     #[task(local = [display], shared = [temp_data])]
@@ -134,7 +197,7 @@ mod app {
         use embedded_graphics::prelude::*;
         use embedded_graphics::primitives::PrimitiveStyleBuilder;
 
-        draw::spawn_after(1000.millis()).ok();
+        draw::spawn_after(TEMP_UPDATE_TIME_MS.millis()).ok();
 
         let mut temperatures = [0.0; TEMP_POINT_COUNT];
         ctx.shared.temp_data.lock(|q| {
