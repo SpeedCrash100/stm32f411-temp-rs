@@ -45,7 +45,11 @@ impl<Style> TemperatureText<Style> {
 
         str.clear();
 
-        uwrite!(str, "{}.{}", integer_part as i32, fract_part as i32).ok();
+        if fract_part < 10.0 {
+            uwrite!(str, "{}.0{}", integer_part as i32, fract_part as i32).ok();
+        } else {
+            uwrite!(str, "{}.{}", integer_part as i32, fract_part as i32).ok();
+        }
     }
 }
 
