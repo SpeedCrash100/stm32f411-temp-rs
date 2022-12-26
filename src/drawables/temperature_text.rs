@@ -1,10 +1,11 @@
-use core::fmt::Write;
 use embedded_graphics::{
     prelude::*,
     text::{renderer::TextRenderer, Text},
     Drawable,
 };
 use heapless::String;
+use num_traits::Float;
+use ufmt::uwrite;
 
 const TEMPERATURE_STRING_SIZE: usize = 7; // (+|-)\d{0,3}\.\d{0,2}
 
@@ -39,7 +40,12 @@ impl<Style> TemperatureText<Style> {
     }
 
     fn write_temp<const N: usize>(temperature: f32, str: &mut String<N>) {
-        write!(str, "{:.2}", temperature).ok();
+        let integer_part = temperature.floor();
+        let fract_part = ((temperature - integer_part) * 100.0).round().abs();
+
+        str.clear();
+
+        uwrite!(str, "{}.{}", integer_part as i32, fract_part as i32).ok();
     }
 }
 
