@@ -6,6 +6,8 @@ extern crate stm32f4xx_hal as hal;
 
 mod drawables;
 
+mod filter;
+
 /// Peripheral Access Crate for our device
 pub use hal::pac;
 
@@ -26,6 +28,7 @@ mod app {
     use ssd1306::{mode::BufferedGraphicsMode, prelude::*, Ssd1306};
 
     use crate::drawables::prelude::*;
+    use crate::filter::MovingAverage;
 
     pub type MainI2cSCL = PB8<AF4<OpenDrain>>;
     pub type MainI2cSDA = PB9<AF4<OpenDrain>>;
@@ -35,7 +38,6 @@ mod app {
 
     const TEMP_PROBE_ADDRESS: u8 = 0x48;
     const TEMP_POINT_COUNT: usize = 60 * 30; // So 30 minutes avg
-    const TEMP_QUEUE_SIZE: usize = TEMP_POINT_COUNT + 1;
     const TEMP_UPDATE_TIME_MS: u32 = 1000;
 
     const PLOT_POINT_COUNT: usize = 30;
@@ -43,9 +45,8 @@ mod app {
 
     #[shared]
     struct Shared {
-        temp_data: Queue<f32, TEMP_QUEUE_SIZE>,
         plot_data: Queue<f32, PLOT_QUEUE_SIZE>,
-
+        current_temperature: f32,
         locked_flash: LockedFlash,
     }
 
@@ -56,7 +57,9 @@ mod app {
             DisplaySize128x64,
             BufferedGraphicsMode<DisplaySize128x64>,
         >,
+
         temp_probe: Lm75<I2CProxy, lm75::ic::Pct2075>,
+        temp_filter: MovingAverage<f32, TEMP_POINT_COUNT>,
     }
 
     #[monotonic(binds = TIM5, default = true)]
@@ -110,13 +113,14 @@ mod app {
 
         (
             Shared {
-                temp_data: Queue::new(),
                 plot_data: Queue::new(),
+                current_temperature: 0.0,
                 locked_flash,
             },
             Local {
                 display,
                 temp_probe,
+                temp_filter: Default::default(),
             },
             init::Monotonics(mono),
         )
@@ -176,7 +180,7 @@ mod app {
         });
     }
 
-    #[task(local = [temp_probe], shared = [temp_data])]
+    #[task(local = [temp_probe, temp_filter, count: usize = TEMP_POINT_COUNT], shared = [current_temperature])]
     fn temperature_take(mut ctx: temperature_take::Context) {
         temperature_take::spawn_after(TEMP_UPDATE_TIME_MS.millis()).ok();
 
@@ -184,25 +188,17 @@ mod app {
             return;
         };
 
-        ctx.shared.temp_data.lock(|q| {
-            // If queue is full send new average value to plot
-            if q.is_full() {
-                // Get avg temperature
-                let avg: f32 = q
-                    .iter()
-                    .cloned()
-                    .reduce(|accum, item| accum + item)
-                    .unwrap()
-                    / TEMP_POINT_COUNT as f32;
-                temperature_plot::spawn(avg).ok();
+        let filter = ctx.local.temp_filter;
+        let temp = filter.filter(temp);
 
-                // Clear queue
-                while !q.is_empty() {
-                    q.dequeue();
-                }
-            }
-            q.enqueue(temp).ok();
-        });
+        ctx.shared.current_temperature.lock(|t| *t = temp);
+
+        *ctx.local.count += 1;
+        *ctx.local.count %= TEMP_POINT_COUNT;
+
+        if *ctx.local.count == 0 {
+            temperature_plot::spawn(temp).ok();
+        }
     }
 
     #[task(shared = [plot_data])]
@@ -217,7 +213,7 @@ mod app {
         save_temperature::spawn().ok();
     }
 
-    #[task(local = [display], shared = [plot_data, temp_data])]
+    #[task(local = [display], shared = [plot_data, current_temperature])]
     fn draw(mut ctx: draw::Context) {
         use embedded_graphics::mono_font::iso_8859_5::FONT_6X10;
         use embedded_graphics::mono_font::MonoTextStyleBuilder;
@@ -234,10 +230,7 @@ mod app {
             }
         });
 
-        let current_temp = ctx
-            .shared
-            .temp_data
-            .lock(|q| q.iter().cloned().last().unwrap());
+        let current_temp = ctx.shared.current_temperature.lock(|t| *t);
 
         let primitive_style = PrimitiveStyleBuilder::new()
             .stroke_width(1)

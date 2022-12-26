@@ -1,6 +1,6 @@
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Line, PrimitiveStyle};
-use micromath::F32Ext;
+use num_traits::Float;
 
 const FLOAT_TOLLERANCE: f32 = 0.00001;
 
