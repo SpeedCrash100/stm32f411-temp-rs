@@ -40,15 +40,19 @@ impl<Style> TemperatureText<Style> {
     }
 
     fn write_temp<const N: usize>(temperature: f32, str: &mut String<N>) {
-        let integer_part = temperature.floor();
-        let fract_part = ((temperature - integer_part) * 100.0).round().abs();
+        let sign_count = 2;
+        let coff = 10_i32.pow(sign_count);
+        let rounded = (temperature * coff as f32).round() as i32;
+
+        let integer_part = rounded / coff;
+        let fract_part = (rounded % coff).abs();
 
         str.clear();
 
-        if fract_part < 10.0 {
-            uwrite!(str, "{}.0{}", integer_part as i32, fract_part as i32).ok();
+        if fract_part < 10 {
+            uwrite!(str, "{}.0{}", integer_part, fract_part).ok();
         } else {
-            uwrite!(str, "{}.{}", integer_part as i32, fract_part as i32).ok();
+            uwrite!(str, "{}.{}", integer_part, fract_part).ok();
         }
     }
 }
