@@ -36,11 +36,17 @@ mod app {
     pub type SharedI2C = BusManager<Mutex<RefCell<MainI2C>>>;
     pub type I2CProxy = I2cProxy<'static, Mutex<RefCell<MainI2C>>>;
 
+    /// Address of I2c Temperature probe
     const TEMP_PROBE_ADDRESS: u8 = 0x48;
-    const TEMP_POINT_COUNT: usize = 60 * 30; // So 30 minutes avg
-    const TEMP_UPDATE_TIME_MS: u32 = 1000;
+    /// Count of temperature readings to average
+    const TEMP_POINT_COUNT: usize = 60 * 10; // 10 minutes
+    /// How often current temperature sended to draw in plot
+    const TEMP_SEND_INTERVAL: usize = 60 * 10; // 10 minutes
+    /// Time between taking temperature in ms
+    const TEMP_UPDATE_TIME_MS: u32 = 1000; // 1 second
 
-    const PLOT_POINT_COUNT: usize = 30;
+    /// Points count on plot
+    const PLOT_POINT_COUNT: usize = 12 * (60 / 10); // 12 hours range on plot
     const PLOT_QUEUE_SIZE: usize = PLOT_POINT_COUNT + 1;
 
     #[shared]
@@ -180,7 +186,7 @@ mod app {
         });
     }
 
-    #[task(local = [temp_probe, temp_filter, count: usize = TEMP_POINT_COUNT], shared = [current_temperature])]
+    #[task(local = [temp_probe, temp_filter, count: usize = TEMP_SEND_INTERVAL], shared = [current_temperature])]
     fn temperature_take(mut ctx: temperature_take::Context) {
         temperature_take::spawn_after(TEMP_UPDATE_TIME_MS.millis()).ok();
 
@@ -194,7 +200,7 @@ mod app {
         ctx.shared.current_temperature.lock(|t| *t = temp);
 
         *ctx.local.count += 1;
-        *ctx.local.count %= TEMP_POINT_COUNT;
+        *ctx.local.count %= TEMP_SEND_INTERVAL;
 
         if *ctx.local.count == 0 {
             temperature_plot::spawn(temp).ok();
