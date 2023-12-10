@@ -1,8 +1,10 @@
 #![no_main]
 #![no_std]
 
-extern crate panic_halt;
 extern crate stm32f4xx_hal as hal;
+
+use defmt_rtt as _;
+use panic_probe as _;
 
 mod drawables;
 
@@ -141,6 +143,7 @@ mod app {
 
     #[task(shared=[locked_flash, plot_data])]
     fn load_temperature(ctx: load_temperature::Context) {
+        defmt::debug!("Loading temperatures...");
         let temp_size = core::mem::size_of::<f32>();
 
         (ctx.shared.locked_flash, ctx.shared.plot_data).lock(|f, d| {
@@ -163,10 +166,13 @@ mod app {
                 d.enqueue(val).ok();
             }
         });
+
+        defmt::info!("Previous temperatures have been loaded");
     }
 
     #[task(shared=[locked_flash, plot_data])]
     fn save_temperature(ctx: save_temperature::Context) {
+        defmt::debug!("Saving temperatures...");
         let temp_size = core::mem::size_of::<f32>();
 
         (ctx.shared.locked_flash, ctx.shared.plot_data).lock(|f, d| {
@@ -184,6 +190,8 @@ mod app {
                     .unwrap();
             }
         });
+
+        defmt::info!("Saved current temperature data");
     }
 
     #[task(local = [temp_probe, temp_filter, count: usize = TEMP_SEND_INTERVAL], shared = [current_temperature])]
@@ -194,8 +202,12 @@ mod app {
             return;
         };
 
+        defmt::debug!("Raw temperature readings: {}", temp);
+
         let filter = ctx.local.temp_filter;
         let temp = filter.filter(temp);
+
+        defmt::debug!("Filtered temperature readings: {}", temp);
 
         ctx.shared.current_temperature.lock(|t| *t = temp);
 
